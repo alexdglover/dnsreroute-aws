@@ -1,0 +1,249 @@
+{
+  "Parameters": {
+    "redirectorInstanceType": {
+      "Type": "String",
+      "Default": "t2.micro",
+      "Description": "Valid instance type. Default is t2.micro."
+    },
+    "redirectorAMI": {
+      "Type": "String",
+      "Default": "ami-6869aa05",
+      "Description": "Latest AMZN Linux AMI. Defaults to ami-6869aa05"
+    },
+    "redirectorEC2Keypair": {
+      "Type": "String",
+      "Default": "dnsreroute-redirector",
+      "Description": "Latest AMZN Linux AMI. Defaults to ami-6869aa05"
+    },
+    "adminAccessSg": {
+      "Type": "String",
+      "Default": "sg-7b639201",
+      "Description": "Security group for admin access to instances"
+    },
+    "redirectorSg": {
+      "Type": "String",
+      "Default": "sg-3571854f",
+      "Description": "Security group for redirector instances"
+    },
+    "redirectorSubnets": {
+      "Type": "CommaDelimitedList",
+      "Default": "subnet-ab7763dd,subnet-b4fddbec,subnet-6531154f",
+      "Description": "List of subnets where public Elb should be deployed"
+    },
+    "publicElbSg": {
+      "Type": "String",
+      "Default": "sg-49718533",
+      "Description": "Security group for public facing ELBs"
+    },
+    "publicElbSubnets": {
+      "Type": "CommaDelimitedList",
+      "Default": "subnet-ab7763dd,subnet-b4fddbec,subnet-6531154f",
+      "Description": "List of subnets where public Elb should be deployed"
+    },
+    "redirectorIamRole": {
+      "Type": "String",
+      "Default": "arn:aws:iam::398787974900:instance-profile/iamRoles-redirectorInstanceProfile-S7QW18BIA7D6",
+      "Description": "IAM role to assign to redirector instances"
+    },
+    "mongoDbUrl": {
+      "Type": "String",
+      "Default": "ds139425.mlab.com",
+      "Description": "IAM role to assign to redirector instances"
+    },
+    "mongoDbUsername": {
+      "Type": "String",
+      "Default": "dnsreroute-admin",
+      "Description": "IAM role to assign to redirector instances"
+    },
+    "mongoDbPassword": {
+      "NoEcho" : "true",
+      "Type": "String",
+      "Description": "IAM role to assign to redirector instances"
+    },
+    "mongoDbPort": {
+      "Type": "String",
+      "Default": "39425",
+      "Description": "IAM role to assign to redirector instances"
+    }
+  },
+  "Resources": {
+    "redirectorLC": {
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+      "Properties": {
+        "AssociatePublicIpAddress": "true",
+        "ImageId": {
+          "Ref": "redirectorAMI"
+        },
+        "IamInstanceProfile": {
+          "Ref": "redirectorIamRole"
+        },
+        "InstanceType": {
+          "Ref": "redirectorInstanceType"
+        },
+        "KeyName": {
+          "Ref": "redirectorEC2Keypair"
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "redirectorSg"
+          },
+          {
+            "Ref": "adminAccessSg"
+          }
+        ],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": [
+              "",
+              [
+                "#!/bin/bash\n\n",
+                "# Install python-devel and gcc for pip library support\n",
+                "yum install python-devel gcc -y\n\n",
+                "# Create app directory and cd to it\n",
+                "mkdir /opt/dnsreroute; cd /opt/dnsreroute\n\n",
+                "# Copy all app files locally\n",
+                "aws s3 sync s3://dnsreroute-appdata-us-east-1/redirectorApp/ ./\n\n",
+                "# Set up virtualenv and activate it\n",
+                "virtualenv redirector\n",
+                ". redirector/bin/activate\n\n",
+                "# Install all Python modules/dependencies\n",
+                "pip install -r requirements.txt\n\n",
+                "# Set environment variables\n",
+                "export OPENSHIFT_MONGODB_DB_URL=", { "Ref": "mongoDbUrl" }, "\n",
+                "export OPENSHIFT_MONGODB_DB_USERNAME=", { "Ref": "mongoDbUsername" }, "\n",
+                "export OPENSHIFT_MONGODB_DB_PASSWORD=", { "Ref": "mongoDbPassword" }, "\n",
+                "export OPENSHIFT_MONGODB_DB_PORT=", { "Ref": "mongoDbPort" }, "\n\n",
+                "# Set all Python files to be executable\n",
+                "chmod +x *.py\n\n",
+                "# Start gunicorn with 3 workers\n",
+                "gunicorn -b 0.0.0.0:80 -k eventlet  --error-logfile=/var/log/redirectorError --access-logfile=/var/log/redirectorAccess --workers=3 wsgi:app\n"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "redirectorASG": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Properties": {
+        "HealthCheckGracePeriod": "300",
+        "HealthCheckType": "ELB",
+        "LaunchConfigurationName": {
+          "Ref": "redirectorLC"
+        },
+        "MinSize": "1",
+        "MaxSize": "5",
+        "LoadBalancerNames": [
+          {
+            "Ref": "redirectorElb"
+          }
+        ],
+        "VPCZoneIdentifier": {
+          "Ref": "redirectorSubnets"
+        }
+      },
+      "UpdatePolicy": {
+        "AutoScalingRollingUpdate": {
+          "MinInstancesInService": "1",
+          "MaxBatchSize": "1",
+          "PauseTime": "PT5M"
+        }
+      }
+    },
+
+    "ScaleUpPolicy" : {
+       "Type" : "AWS::AutoScaling::ScalingPolicy",
+       "Properties" : {
+          "AdjustmentType" : "ChangeInCapacity",
+          "AutoScalingGroupName" : { "Ref" : "redirectorASG" },
+          "Cooldown" : "300",
+          "ScalingAdjustment" : "1"
+       }
+    },
+    "NetworkAlarmHigh": {
+       "Type": "AWS::CloudWatch::Alarm",
+       "Properties": {
+          "EvaluationPeriods": "1",
+          "Statistic": "Average",
+          "Threshold": "500",
+          "AlarmDescription": "Alarm if ELB latency exceeds 0.5 seconds, on average, for a period of 60 seconds",
+          "Period": "60",
+          "AlarmActions": [ { "Ref": "ScaleUpPolicy" } ],
+          "Namespace": "AWS/ELB",
+          "Dimensions": [ {
+             "Name": "LoadBalancerName",
+             "Value": { "Ref": "redirectorElb" }
+          } ],
+          "ComparisonOperator": "GreaterThanThreshold",
+          "MetricName": "Latency"
+       }
+    },
+
+    "ScaleDownPolicy" : {
+       "Type" : "AWS::AutoScaling::ScalingPolicy",
+       "Properties" : {
+          "AdjustmentType" : "ChangeInCapacity",
+          "AutoScalingGroupName" : { "Ref" : "redirectorASG" },
+          "Cooldown" : "600",
+          "ScalingAdjustment" : "-1"
+       }
+    },
+    "NetworkAlarmLow": {
+       "Type": "AWS::CloudWatch::Alarm",
+       "Properties": {
+          "EvaluationPeriods": "3",
+          "Statistic": "Average",
+          "Threshold": "200",
+          "AlarmDescription": "Alarm if ELB latency is consistently less than 0.2 seconds, on average, for a period of 180 seconds",
+          "Period": "60",
+          "AlarmActions": [ { "Ref": "ScaleDownPolicy" } ],
+          "Namespace": "AWS/ELB",
+          "Dimensions": [ {
+             "Name": "LoadBalancerName",
+             "Value": { "Ref": "redirectorElb" }
+          } ],
+          "ComparisonOperator": "LessThanOrEqualToThreshold",
+          "MetricName": "Latency"
+       }
+    },
+
+    "redirectorElb": {
+      "Type": "AWS::ElasticLoadBalancing::LoadBalancer",
+      "Properties": {
+        "CrossZone": "true",
+        "HealthCheck": {
+          "HealthyThreshold": "3",
+          "Interval": "30",
+          "Target": "TCP:80",
+          "Timeout": "5",
+          "UnhealthyThreshold": "3"
+        },
+        "Listeners": [
+          {
+            "InstancePort": "80",
+            "InstanceProtocol": "HTTP",
+            "LoadBalancerPort": "80",
+            "Protocol": "HTTP"
+          },
+          {
+            "InstancePort": "80",
+            "InstanceProtocol": "HTTP",
+            "LoadBalancerPort": "443",
+            "Protocol": "HTTPS",
+            "SSLCertificateId": "arn:aws:acm:us-east-1:398787974900:certificate/ca3e1291-e485-4970-a4fe-d03c764f86f1"
+          }
+        ],
+        "Scheme": "internet-facing",
+        "SecurityGroups": [
+          {
+            "Ref": "publicElbSg"
+          }
+        ],
+        "Subnets": {
+          "Ref": "publicElbSubnets"
+        }
+      }
+    }
+  },
+  "Outputs": {}
+}

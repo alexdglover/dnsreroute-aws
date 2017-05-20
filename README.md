@@ -1,2 +1,2 @@
 # dnsreroute-aws
-CloudFormation and application code for deploying and managing the redirecting portion of DNSReRoute
+CloudFormation and application code for deploying and managing the redirecting portion of DNSReRoute. The service endpoint is [service.dnsreroute.xyz](service.dnsreroute.xyz). If you are using the service, you must create a CNAME record with your DNS provider that points to `service.dnsreroute.xyz`. Next, create a corresponding route at [www.dnsreroute.xyz](www.dnsreroute.xyz), providing the URL where users should be redirected to. That's it!

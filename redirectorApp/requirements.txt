@@ -4,3 +4,4 @@ pymongo
 requests
 gunicorn
 eventlet
+gevent

@@ -116,7 +116,7 @@
                 "# Set all Python files to be executable\n",
                 "chmod +x *.py\n\n",
                 "# Start gunicorn with 3 workers\n",
-                "gunicorn -b 0.0.0.0:80 -k eventlet  --error-logfile=/var/log/redirectorError --access-logfile=/var/log/redirectorAccess --workers=3 wsgi:app\n"
+                "gunicorn -b 0.0.0.0:80 -k gevent --error-logfile=/var/log/redirectorError --access-logfile=/var/log/redirectorAccess --workers=3 wsgi:app\n"
               ]
             ]
           }

@@ -33,7 +33,7 @@ handle = connect()
 def home():
     host = request.headers['Host']
     host = host.split(':')[0]
-    if host != 'home.dnsreroute.xyz':
+    if host != 'service.dnsreroute.xyz':
         route = handle.routes.find_one({'incomingRoute': host})
         if route:
             outgoingRoute = route['outgoingRoute']
